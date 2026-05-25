@@ -567,10 +567,16 @@ export class TetrisScene extends Phaser.Scene {
       this.board.unshift(new Array(COLS).fill(0));
     }
     this.clearingRows = [];
+    // Limpa flashGraphics IMEDIATAMENTE — senão último desenho do flash persiste
+    // visualmente (mesmo com alpha próximo de 0, Phaser pode renderizar).
+    this.flashGraphics.clear();
     this.refreshChrome();
     if (n === 4) playTone(880, 200, "triangle", 0.16);
     else playTone(660, 120, "triangle", 0.12);
     this.spawnNext();
+    // Re-renderiza tudo agora (não espera o próximo frame) pra atualizar
+    // board limpo + active piece nova no mesmo frame.
+    this.drawAll();
   }
 
   private tryHold() {
@@ -793,7 +799,10 @@ export class TetrisScene extends Phaser.Scene {
 
   private drawClearFlash() {
     this.flashGraphics.clear();
-    const alpha = this.clearFlashTimer / 220;
+    // Clamp alpha [0, 1] — clearFlashTimer pode ir abaixo de zero antes
+    // do applyLineClears disparar; sem clamp Phaser pode renderizar weird.
+    const alpha = Math.max(0, Math.min(1, this.clearFlashTimer / 220));
+    if (alpha <= 0) return;
     for (const r of this.clearingRows) {
       this.flashGraphics.fillStyle(COLOR_HEX.fg, alpha);
       this.flashGraphics.fillRect(this.layout.pfX, this.layout.pfY + r * this.layout.cell,
