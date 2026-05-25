@@ -364,41 +364,91 @@ export class TetrisScene extends Phaser.Scene {
   }
 
   private setupTouchControls() {
-    // Touch: swipe horizontal = move, swipe down longa = hard drop,
-    // swipe down curto = soft drop, swipe up = hold, tap = rotate.
+    // Touch model com modo de gesto travado pra evitar mixing de ações:
+    //
+    // 1. pointerdown — começa gestura, dragMode = "none"
+    // 2. pointermove — se moveu > 18px, trava dragMode = "h" ou "v" (eixo dominante)
+    //    - "h": cada cell de drag = 1 step horizontal
+    //    - "v": cada cell de drag para BAIXO = 1 soft drop
+    // 3. pointerup:
+    //    - se totalDist < 14 e duration < 300: TAP → rotate
+    //    - se dragMode "v" e dy < -60: SWIPE UP → hold
+    //    - se dragMode "v" e dy > 120 e NÃO houve soft drop e duration < 200: FLICK DOWN → hard drop
+    //    - senão: nada (gestura de drag termina sem ação adicional)
+    //
+    // Resultado: tap-and-drag NÃO dispara rotate (totalDist mata o tap).
+    // Soft drop e hard drop são mutuamente exclusivos (softDropFired flag).
     let startX = 0, startY = 0, startTime = 0, tracking = false;
+    let lastX = 0, lastY = 0;
+    let totalDist = 0;
+    let dragMode: "none" | "h" | "v" = "none";
+    let softDropFired = false;
+    let dragStartX = 0, dragStartY = 0;
     let lastSoftDrop = 0;
 
+    const DRAG_THRESHOLD = 18;
+    const TAP_MAX_DIST = 14;
+    const TAP_MAX_DURATION = 300;
+    const HOLD_DY_THRESHOLD = -60;
+    const HARD_DROP_DY = 120;
+    const HARD_DROP_MAX_DURATION = 200;
+
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
-      startX = pointer.x; startY = pointer.y;
+      startX = lastX = dragStartX = pointer.x;
+      startY = lastY = dragStartY = pointer.y;
       startTime = this.time.now;
+      totalDist = 0;
+      dragMode = "none";
+      softDropFired = false;
       tracking = true;
       lastSoftDrop = this.time.now;
     });
 
     this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => {
       if (!tracking || !pointer.isDown || !this.active) return;
+
+      // Acumula distância total (NÃO reseta) — usada pra detectar tap genuíno
+      totalDist += Math.hypot(pointer.x - lastX, pointer.y - lastY);
+      lastX = pointer.x;
+      lastY = pointer.y;
+
       const now = this.time.now;
       const dx = pointer.x - startX;
       const dy = pointer.y - startY;
       const cell = this.layout.cell;
 
-      // Move horizontal: cada cell de drag = 1 step
-      if (Math.abs(dx) >= cell * 0.8) {
-        const steps = Math.trunc(dx / (cell * 0.8));
-        for (let i = 0; i < Math.abs(steps); i++) {
-          this.tryMove(steps > 0 ? 1 : -1, 0);
+      // Trava modo de drag no primeiro frame que passa do threshold
+      if (dragMode === "none") {
+        if (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) {
+          dragMode = Math.abs(dx) > Math.abs(dy) ? "h" : "v";
+          // Reseta o ponto de referência do drag pra começar contagem do zero
+          dragStartX = pointer.x;
+          dragStartY = pointer.y;
         }
-        startX = pointer.x;
       }
 
-      // Soft drop ao arrastar pra baixo (continuo)
-      if (dy > cell * 0.8 && now - lastSoftDrop > SOFT_DROP_RATE) {
-        if (this.tryMove(0, 1)) {
-          this.score += 1; this.refreshChrome(); this.gravityAccumulator = 0;
+      if (dragMode === "h") {
+        // Move horizontal proporcional ao drag, sem mistura com vertical
+        const dragDx = pointer.x - dragStartX;
+        const stepSize = cell * 0.8;
+        while (Math.abs(dragDx) >= stepSize) {
+          const dir = dragDx > 0 ? 1 : -1;
+          this.tryMove(dir, 0);
+          dragStartX += dir * stepSize;
         }
-        lastSoftDrop = now;
-        startY = pointer.y; // reset pra continuar swipe
+      } else if (dragMode === "v") {
+        // Soft drop SÓ ao arrastar pra baixo (nunca em movimento pra cima)
+        const dragDy = pointer.y - dragStartY;
+        if (dragDy > cell * 0.8 && now - lastSoftDrop > SOFT_DROP_RATE) {
+          if (this.tryMove(0, 1)) {
+            this.score += 1;
+            this.refreshChrome();
+            this.gravityAccumulator = 0;
+            softDropFired = true;
+          }
+          lastSoftDrop = now;
+          dragStartY = pointer.y;
+        }
       }
     });
 
@@ -406,28 +456,32 @@ export class TetrisScene extends Phaser.Scene {
       if (!tracking) return;
       tracking = false;
       if (!this.active) return;
+
+      const duration = this.time.now - startTime;
       const dx = pointer.x - startX;
       const dy = pointer.y - startY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      const duration = this.time.now - startTime;
 
-      // Tap rápido sem mover muito = rotate
-      if (dist < 15 && duration < 250) {
+      // TAP genuíno (não houve drag): rotate
+      if (dragMode === "none" && totalDist < TAP_MAX_DIST && duration < TAP_MAX_DURATION) {
         this.tryRotate(1);
         return;
       }
 
-      // Swipe pra cima = hold
-      if (dy < -60 && Math.abs(dy) > Math.abs(dx) && duration < 400) {
+      // SWIPE UP final (drag mode vertical, terminou indo pra cima): hold
+      if (dragMode === "v" && dy < HOLD_DY_THRESHOLD && Math.abs(dy) > Math.abs(dx)) {
         this.tryHold();
         return;
       }
 
-      // Swipe pra baixo rápido = hard drop
-      if (dy > 100 && Math.abs(dy) > Math.abs(dx) && duration < 250) {
+      // FLICK DOWN rápido (vertical mode, fast, sem soft drop antes): hard drop
+      if (dragMode === "v" && !softDropFired
+          && dy > HARD_DROP_DY && Math.abs(dy) > Math.abs(dx)
+          && duration < HARD_DROP_MAX_DURATION) {
         this.hardDrop();
         return;
       }
+
+      // Qualquer outra gestura termina sem ação adicional
     });
   }
 
