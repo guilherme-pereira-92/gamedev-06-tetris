@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "number": 6,
+  "slug": "06-tetris",
+  "title": "Tetris",
+  "shortDescription": "Encaixe peças, limpe linhas, supere recordes — clássico Russian puzzle.",
+  "stack": ["TypeScript", "Phaser 3", "Vite"],
+  "concepts": [
+    "tetrominos (7 peças) com 4 rotações cada",
+    "7-bag randomizer (distribuição justa)",
+    "wall kicks na rotação (SRS simplificado)",
+    "DAS (Delayed Auto Shift) + ARR (Auto Repeat Rate) pra movimento sólido",
+    "soft drop + hard drop",
+    "line clear com scoring tier (40/100/300/1200 × level)",
+    "level system (gravidade acelera a cada 10 linhas)",
+    "ghost piece (preview de landing)",
+    "hold piece (swap único por turno)",
+    "next queue (3 próximas peças)",
+    "lock delay (500ms antes de travar peça encostada)"
+  ],
+  "publishedAt": "2026-05-24",
+  "live": "https://guilherme-pereira-92.github.io/gamedev-06-tetris/",
+  "repo": "https://github.com/guilherme-pereira-92/gamedev-06-tetris",
+  "cover": "screenshots/cover.png",
+  "playable": true,
+  "mobile": "letterbox"
+}
