@@ -23,5 +23,5 @@
   "repo": "https://github.com/guilherme-pereira-92/gamedev-06-tetris",
   "cover": "screenshots/cover.png",
   "playable": true,
-  "mobile": "letterbox"
+  "mobile": "responsive"
 }

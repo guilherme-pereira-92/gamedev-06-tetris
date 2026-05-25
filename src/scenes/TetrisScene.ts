@@ -1,18 +1,12 @@
 import Phaser from "phaser";
-import { COLOR_HEX, TEXT_PRESETS } from "../theme";
+import { COLOR_HEX, TEXT_PRESETS, FONTS, COLORS } from "../theme";
 import { drawDiagonalScanlines, createPulsingDot, addCornerLabel } from "../ui";
 import { takeScreenshot } from "../screenshot";
 import { playTone, unlockAudio } from "../audio";
+import { isTouchDevice } from "../input";
 
-const WIDTH = 800;
-const HEIGHT = 600;
 const COLS = 10;
 const ROWS = 20;
-const CELL = 22;
-const PLAYFIELD_W = COLS * CELL; // 220
-const PLAYFIELD_H = ROWS * CELL; // 440
-const PLAYFIELD_X = (WIDTH - PLAYFIELD_W) / 2; // 290
-const PLAYFIELD_Y = 80;
 
 const DAS_DELAY = 160;
 const ARR_RATE = 40;
@@ -22,17 +16,11 @@ const LOCK_DELAY = 500;
 const HIGHSCORE_KEY = "gamedev-06-tetris-highscore";
 
 type PieceId = "I" | "O" | "T" | "S" | "Z" | "J" | "L";
-type Cell = number; // 0 = empty, 1+ = filled (color index)
+type Cell = number;
 
-// Cores por peça (mistura da paleta do site + alguns extras pra distinção visual)
 const PIECE_COLORS: Record<PieceId, number> = {
-  I: 0x00d4ff, // cyan
-  O: 0xfbbf24, // amber
-  T: 0xc084fc, // light purple
-  S: 0x7ad17a, // green
-  Z: 0xef4444, // red
-  J: 0x60a5fa, // light blue
-  L: 0xff4500, // orange (accent)
+  I: 0x00d4ff, O: 0xfbbf24, T: 0xc084fc, S: 0x7ad17a,
+  Z: 0xef4444, J: 0x60a5fa, L: 0xff4500,
 };
 
 const PIECE_COLOR_INDEX: Record<PieceId, number> = {
@@ -40,18 +28,10 @@ const PIECE_COLOR_INDEX: Record<PieceId, number> = {
 };
 
 const INDEX_TO_COLOR: number[] = [
-  0, // 0 (empty)
-  PIECE_COLORS.I,
-  PIECE_COLORS.O,
-  PIECE_COLORS.T,
-  PIECE_COLORS.S,
-  PIECE_COLORS.Z,
-  PIECE_COLORS.J,
-  PIECE_COLORS.L,
+  0, PIECE_COLORS.I, PIECE_COLORS.O, PIECE_COLORS.T,
+  PIECE_COLORS.S, PIECE_COLORS.Z, PIECE_COLORS.J, PIECE_COLORS.L,
 ];
 
-// Shapes definidas em 4×4 (padrão SRS, exceto O que é 2×2 mas usamos 4×4 padded).
-// Array de 4 rotações por peça. Cada rotação é matriz com 1 = cell ocupada.
 type Matrix = number[][];
 
 const SHAPES: Record<PieceId, Matrix[]> = {
@@ -61,59 +41,57 @@ const SHAPES: Record<PieceId, Matrix[]> = {
     [[0,0,0,0],[0,0,0,0],[1,1,1,1],[0,0,0,0]],
     [[0,1,0,0],[0,1,0,0],[0,1,0,0],[0,1,0,0]],
   ],
-  O: [
-    [[1,1],[1,1]],
-    [[1,1],[1,1]],
-    [[1,1],[1,1]],
-    [[1,1],[1,1]],
-  ],
+  O: [[[1,1],[1,1]],[[1,1],[1,1]],[[1,1],[1,1]],[[1,1],[1,1]]],
   T: [
-    [[0,1,0],[1,1,1],[0,0,0]],
-    [[0,1,0],[0,1,1],[0,1,0]],
-    [[0,0,0],[1,1,1],[0,1,0]],
-    [[0,1,0],[1,1,0],[0,1,0]],
+    [[0,1,0],[1,1,1],[0,0,0]], [[0,1,0],[0,1,1],[0,1,0]],
+    [[0,0,0],[1,1,1],[0,1,0]], [[0,1,0],[1,1,0],[0,1,0]],
   ],
   S: [
-    [[0,1,1],[1,1,0],[0,0,0]],
-    [[0,1,0],[0,1,1],[0,0,1]],
-    [[0,0,0],[0,1,1],[1,1,0]],
-    [[1,0,0],[1,1,0],[0,1,0]],
+    [[0,1,1],[1,1,0],[0,0,0]], [[0,1,0],[0,1,1],[0,0,1]],
+    [[0,0,0],[0,1,1],[1,1,0]], [[1,0,0],[1,1,0],[0,1,0]],
   ],
   Z: [
-    [[1,1,0],[0,1,1],[0,0,0]],
-    [[0,0,1],[0,1,1],[0,1,0]],
-    [[0,0,0],[1,1,0],[0,1,1]],
-    [[0,1,0],[1,1,0],[1,0,0]],
+    [[1,1,0],[0,1,1],[0,0,0]], [[0,0,1],[0,1,1],[0,1,0]],
+    [[0,0,0],[1,1,0],[0,1,1]], [[0,1,0],[1,1,0],[1,0,0]],
   ],
   J: [
-    [[1,0,0],[1,1,1],[0,0,0]],
-    [[0,1,1],[0,1,0],[0,1,0]],
-    [[0,0,0],[1,1,1],[0,0,1]],
-    [[0,1,0],[0,1,0],[1,1,0]],
+    [[1,0,0],[1,1,1],[0,0,0]], [[0,1,1],[0,1,0],[0,1,0]],
+    [[0,0,0],[1,1,1],[0,0,1]], [[0,1,0],[0,1,0],[1,1,0]],
   ],
   L: [
-    [[0,0,1],[1,1,1],[0,0,0]],
-    [[0,1,0],[0,1,0],[0,1,1]],
-    [[0,0,0],[1,1,1],[1,0,0]],
-    [[1,1,0],[0,1,0],[0,1,0]],
+    [[0,0,1],[1,1,1],[0,0,0]], [[0,1,0],[0,1,0],[0,1,1]],
+    [[0,0,0],[1,1,1],[1,0,0]], [[1,1,0],[0,1,0],[0,1,0]],
   ],
 };
 
-// Wall kicks (simplificado, não é SRS completo mas funciona bem na prática)
 const WALL_KICKS: Array<[number, number]> = [
-  [0, 0],   // sem kick
-  [-1, 0],  // 1 pra esquerda
-  [1, 0],   // 1 pra direita
-  [0, -1],  // 1 pra cima
-  [-2, 0],  // 2 pra esquerda
-  [2, 0],   // 2 pra direita
+  [0, 0], [-1, 0], [1, 0], [0, -1], [-2, 0], [2, 0],
 ];
 
 interface ActivePiece {
   id: PieceId;
   rotation: number;
-  x: number; // col da matriz no playfield
-  y: number; // row da matriz no playfield
+  x: number;
+  y: number;
+}
+
+interface Layout {
+  cell: number;
+  pfX: number;
+  pfY: number;
+  pfW: number;
+  pfH: number;
+  holdX: number;
+  holdY: number;
+  holdSize: number;
+  nextX: number;
+  nextY: number;
+  nextSize: number;
+  nextCount: number;
+  statsX: number;
+  statsY: number;
+  scoreFontSize: number;
+  portrait: boolean;
 }
 
 type GameState = "playing" | "paused" | "gameover";
@@ -126,6 +104,10 @@ export class TetrisScene extends Phaser.Scene {
   private nextQueue: PieceId[] = [];
   private bag: PieceId[] = [];
 
+  private bg!: Phaser.GameObjects.Rectangle;
+  private scanlines!: Phaser.GameObjects.Graphics;
+  private frameGraphics!: Phaser.GameObjects.Graphics;
+  private gridGraphics!: Phaser.GameObjects.Graphics;
   private boardGraphics!: Phaser.GameObjects.Graphics;
   private activeGraphics!: Phaser.GameObjects.Graphics;
   private ghostGraphics!: Phaser.GameObjects.Graphics;
@@ -133,9 +115,12 @@ export class TetrisScene extends Phaser.Scene {
   private nextGraphics!: Phaser.GameObjects.Graphics;
   private flashGraphics!: Phaser.GameObjects.Graphics;
 
+  private chromeTexts: Phaser.GameObjects.Text[] = [];
   private scoreText!: Phaser.GameObjects.Text;
   private linesText!: Phaser.GameObjects.Text;
   private levelText!: Phaser.GameObjects.Text;
+  private holdLabel!: Phaser.GameObjects.Text;
+  private nextLabel!: Phaser.GameObjects.Text;
 
   private overlayBg!: Phaser.GameObjects.Rectangle;
   private overlayTitle!: Phaser.GameObjects.Text;
@@ -145,13 +130,13 @@ export class TetrisScene extends Phaser.Scene {
   private lines = 0;
   private level = 1;
   private state: GameState = "playing";
+  private layout!: Layout;
 
   private gravityAccumulator = 0;
   private lockTimer = 0;
   private clearingRows: number[] = [];
   private clearFlashTimer = 0;
 
-  // DAS state
   private leftHeldSince = 0;
   private leftLastMove = 0;
   private rightHeldSince = 0;
@@ -163,19 +148,19 @@ export class TetrisScene extends Phaser.Scene {
     Phaser.Input.Keyboard.Key
   >;
 
-  constructor() {
-    super("game");
-  }
+  constructor() { super("game"); }
 
   create() {
-    this.add.rectangle(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT, COLOR_HEX.bg);
-    drawDiagonalScanlines(this, WIDTH, HEIGHT, 18, 0.04);
+    this.layout = this.computeLayout();
+
+    this.bg = this.add.rectangle(0, 0, this.scale.width, this.scale.height, COLOR_HEX.bg);
+    this.bg.setOrigin(0, 0);
+    this.scanlines = drawDiagonalScanlines(this, this.scale.width, this.scale.height, 18, 0.04);
 
     this.initBoard();
-    this.drawPlayfieldFrame();
-    this.drawSidePanels();
-    this.drawChrome();
 
+    this.frameGraphics = this.add.graphics();
+    this.gridGraphics = this.add.graphics();
     this.boardGraphics = this.add.graphics();
     this.ghostGraphics = this.add.graphics();
     this.activeGraphics = this.add.graphics();
@@ -183,6 +168,9 @@ export class TetrisScene extends Phaser.Scene {
     this.nextGraphics = this.add.graphics();
     this.flashGraphics = this.add.graphics();
 
+    this.drawChrome();
+    this.drawSidePanels();
+    this.drawPlayfieldFrame();
     this.drawOverlay();
 
     const kb = this.input.keyboard!;
@@ -202,14 +190,106 @@ export class TetrisScene extends Phaser.Scene {
     };
     kb.on("keydown", unlockAudio);
 
+    this.setupTouchControls();
     this.spawnNext();
     this.refreshChrome();
     this.drawAll();
 
-    this.events.on("shutdown", () => {
-      // cleanup if needed
-    });
+    this.scale.on("resize", this.onResize, this);
+    this.events.once("shutdown", () => this.scale.off("resize", this.onResize, this));
   }
+
+  // ---------- responsive layout ----------
+
+  private computeLayout(): Layout {
+    const W = this.scale.width;
+    const H = this.scale.height;
+    const portrait = H > W;
+    let cell: number;
+    let pfX: number, pfY: number;
+    let holdX: number, holdY: number, holdSize: number;
+    let nextX: number, nextY: number, nextSize: number, nextCount: number;
+    let statsX: number, statsY: number;
+    let scoreFontSize: number;
+
+    if (portrait) {
+      // PORTRAIT: playfield grande no centro, panels acima e abaixo
+      // - top: HOLD (esq) + NEXT (dir) + stats no meio
+      // - playfield: middle
+      // - bottom: hint
+      const topReserved = 110; // espaço pra HOLD/NEXT no topo
+      const bottomReserved = 60; // espaço pra hint/touch hint
+      const availableH = H - topReserved - bottomReserved;
+      const cellByH = availableH / ROWS;
+      const cellByW = (W * 0.92) / COLS;
+      cell = Math.floor(Math.min(cellByH, cellByW));
+      const pfW = cell * COLS;
+      const pfH = cell * ROWS;
+      pfX = (W - pfW) / 2;
+      pfY = topReserved + (availableH - pfH) / 2;
+
+      // HOLD top-left
+      holdSize = Math.min(20, cell * 0.85);
+      holdX = 22;
+      holdY = 56;
+
+      // NEXT top-right (apenas 1 next em portrait pra caber)
+      nextSize = holdSize;
+      nextCount = 1;
+      nextX = W - 22 - 4 * nextSize;
+      nextY = 56;
+
+      // Stats no centro entre HOLD e NEXT
+      statsX = W / 2;
+      statsY = 50;
+      scoreFontSize = Math.min(22, W * 0.05);
+    } else {
+      // LANDSCAPE: layout clássico — playfield centro, HOLD esq, NEXT dir
+      const topReserved = 60;
+      const bottomReserved = 50;
+      const availableH = H - topReserved - bottomReserved;
+      const cellByH = availableH / ROWS;
+      const cellByW = (W * 0.4) / COLS; // playfield ocupa 40% da largura, deixa espaço pros panels
+      cell = Math.floor(Math.min(cellByH, cellByW));
+      const pfW = cell * COLS;
+      const pfH = cell * ROWS;
+      pfX = (W - pfW) / 2;
+      pfY = topReserved + (availableH - pfH) / 2;
+
+      // HOLD left of playfield
+      holdSize = Math.max(14, cell * 0.85);
+      holdX = pfX - 4 * holdSize - 32;
+      holdY = pfY + 40;
+
+      // NEXT right of playfield (até 3 next)
+      nextSize = holdSize;
+      nextCount = 3;
+      nextX = pfX + pfW + 32;
+      nextY = pfY + 40;
+
+      // Stats embaixo do hold
+      statsX = holdX + 2 * holdSize;
+      statsY = holdY + 4 * holdSize + 30;
+      scoreFontSize = 24;
+    }
+
+    return { cell, pfX, pfY, pfW: cell * COLS, pfH: cell * ROWS,
+      holdX, holdY, holdSize, nextX, nextY, nextSize, nextCount,
+      statsX, statsY, scoreFontSize, portrait };
+  }
+
+  private onResize(gameSize: Phaser.Structs.Size) {
+    this.bg.setSize(gameSize.width, gameSize.height);
+    this.scanlines.destroy();
+    this.scanlines = drawDiagonalScanlines(this, gameSize.width, gameSize.height, 18, 0.04);
+    this.layout = this.computeLayout();
+    this.drawChrome();
+    this.drawSidePanels();
+    this.drawPlayfieldFrame();
+    this.drawAll();
+  }
+
+  // ---------- update loop ----------
 
   update(time: number, delta: number) {
     if (Phaser.Input.Keyboard.JustDown(this.keys.K)) takeScreenshot(this.game, "gamedev-06-tetris");
@@ -225,23 +305,17 @@ export class TetrisScene extends Phaser.Scene {
       return;
     }
 
-    if (this.state !== "playing") return;
-    if (!this.active) return;
+    if (this.state !== "playing" || !this.active) return;
 
-    // Line clear animation
     if (this.clearingRows.length > 0) {
       this.clearFlashTimer -= delta;
       this.drawClearFlash();
-      if (this.clearFlashTimer <= 0) {
-        this.applyLineClears();
-      }
+      if (this.clearFlashTimer <= 0) this.applyLineClears();
       return;
     }
 
-    // Input
     this.handleInput(time);
 
-    // Gravity
     const gravityMs = this.gravityInterval();
     this.gravityAccumulator += delta;
     while (this.gravityAccumulator >= gravityMs) {
@@ -249,12 +323,9 @@ export class TetrisScene extends Phaser.Scene {
       this.fallOneStep();
     }
 
-    // Lock delay (peça encostou no chão por X ms = trava)
     if (this.isPieceLanded()) {
       this.lockTimer += delta;
-      if (this.lockTimer >= LOCK_DELAY) {
-        this.lockPiece();
-      }
+      if (this.lockTimer >= LOCK_DELAY) this.lockPiece();
     } else {
       this.lockTimer = 0;
     }
@@ -267,52 +338,97 @@ export class TetrisScene extends Phaser.Scene {
   private handleInput(time: number) {
     const justDown = Phaser.Input.Keyboard.JustDown;
 
-    // Movimento horizontal com DAS
     if (this.keys.LEFT.isDown) {
-      if (this.leftHeldSince === 0) {
-        this.leftHeldSince = time;
-        this.leftLastMove = time;
-        this.tryMove(-1, 0);
-      } else if (time - this.leftHeldSince > DAS_DELAY && time - this.leftLastMove > ARR_RATE) {
-        this.leftLastMove = time;
-        this.tryMove(-1, 0);
+      if (this.leftHeldSince === 0) { this.leftHeldSince = time; this.leftLastMove = time; this.tryMove(-1, 0); }
+      else if (time - this.leftHeldSince > DAS_DELAY && time - this.leftLastMove > ARR_RATE) {
+        this.leftLastMove = time; this.tryMove(-1, 0);
       }
-    } else {
-      this.leftHeldSince = 0;
-    }
+    } else this.leftHeldSince = 0;
 
     if (this.keys.RIGHT.isDown) {
-      if (this.rightHeldSince === 0) {
-        this.rightHeldSince = time;
-        this.rightLastMove = time;
-        this.tryMove(1, 0);
-      } else if (time - this.rightHeldSince > DAS_DELAY && time - this.rightLastMove > ARR_RATE) {
-        this.rightLastMove = time;
-        this.tryMove(1, 0);
+      if (this.rightHeldSince === 0) { this.rightHeldSince = time; this.rightLastMove = time; this.tryMove(1, 0); }
+      else if (time - this.rightHeldSince > DAS_DELAY && time - this.rightLastMove > ARR_RATE) {
+        this.rightLastMove = time; this.tryMove(1, 0);
       }
-    } else {
-      this.rightHeldSince = 0;
-    }
+    } else this.rightHeldSince = 0;
 
-    // Soft drop
     if (this.keys.DOWN.isDown && time - this.softDropLast > SOFT_DROP_RATE) {
       this.softDropLast = time;
-      if (this.tryMove(0, 1)) {
-        this.score += 1;
-        this.refreshChrome();
-        this.gravityAccumulator = 0;
-      }
+      if (this.tryMove(0, 1)) { this.score += 1; this.refreshChrome(); this.gravityAccumulator = 0; }
     }
 
-    // Rotação (UP ou X = CW, Z = CCW)
     if (justDown(this.keys.UP) || justDown(this.keys.X)) this.tryRotate(1);
     if (justDown(this.keys.Z)) this.tryRotate(-1);
-
-    // Hard drop
     if (justDown(this.keys.SPACE)) this.hardDrop();
-
-    // Hold
     if (justDown(this.keys.SHIFT) || justDown(this.keys.C)) this.tryHold();
+  }
+
+  private setupTouchControls() {
+    // Touch: swipe horizontal = move, swipe down longa = hard drop,
+    // swipe down curto = soft drop, swipe up = hold, tap = rotate.
+    let startX = 0, startY = 0, startTime = 0, tracking = false;
+    let lastSoftDrop = 0;
+
+    this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      startX = pointer.x; startY = pointer.y;
+      startTime = this.time.now;
+      tracking = true;
+      lastSoftDrop = this.time.now;
+    });
+
+    this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => {
+      if (!tracking || !pointer.isDown || !this.active) return;
+      const now = this.time.now;
+      const dx = pointer.x - startX;
+      const dy = pointer.y - startY;
+      const cell = this.layout.cell;
+
+      // Move horizontal: cada cell de drag = 1 step
+      if (Math.abs(dx) >= cell * 0.8) {
+        const steps = Math.trunc(dx / (cell * 0.8));
+        for (let i = 0; i < Math.abs(steps); i++) {
+          this.tryMove(steps > 0 ? 1 : -1, 0);
+        }
+        startX = pointer.x;
+      }
+
+      // Soft drop ao arrastar pra baixo (continuo)
+      if (dy > cell * 0.8 && now - lastSoftDrop > SOFT_DROP_RATE) {
+        if (this.tryMove(0, 1)) {
+          this.score += 1; this.refreshChrome(); this.gravityAccumulator = 0;
+        }
+        lastSoftDrop = now;
+        startY = pointer.y; // reset pra continuar swipe
+      }
+    });
+
+    this.input.on("pointerup", (pointer: Phaser.Input.Pointer) => {
+      if (!tracking) return;
+      tracking = false;
+      if (!this.active) return;
+      const dx = pointer.x - startX;
+      const dy = pointer.y - startY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const duration = this.time.now - startTime;
+
+      // Tap rápido sem mover muito = rotate
+      if (dist < 15 && duration < 250) {
+        this.tryRotate(1);
+        return;
+      }
+
+      // Swipe pra cima = hold
+      if (dy < -60 && Math.abs(dy) > Math.abs(dx) && duration < 400) {
+        this.tryHold();
+        return;
+      }
+
+      // Swipe pra baixo rápido = hard drop
+      if (dy > 100 && Math.abs(dy) > Math.abs(dx) && duration < 250) {
+        this.hardDrop();
+        return;
+      }
+    });
   }
 
   // ---------- piece ops ----------
@@ -326,17 +442,12 @@ export class TetrisScene extends Phaser.Scene {
   private spawnPiece(id: PieceId) {
     const shape = SHAPES[id][0];
     this.active = {
-      id,
-      rotation: 0,
+      id, rotation: 0,
       x: Math.floor((COLS - shape[0].length) / 2),
-      y: id === "I" ? -1 : 0, // I spawn ligeiramente mais alto
+      y: id === "I" ? -1 : 0,
     };
     this.canHold = true;
-
-    if (!this.isValidPosition(this.active)) {
-      this.gameOver();
-      return;
-    }
+    if (!this.isValidPosition(this.active)) { this.gameOver(); return; }
     this.gravityAccumulator = 0;
     this.lockTimer = 0;
   }
@@ -344,7 +455,6 @@ export class TetrisScene extends Phaser.Scene {
   private drawFromBag(): PieceId {
     if (this.bag.length === 0) {
       this.bag = ["I", "O", "T", "S", "Z", "J", "L"];
-      // Fisher-Yates shuffle
       for (let i = this.bag.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [this.bag[i], this.bag[j]] = [this.bag[j], this.bag[i]];
@@ -354,9 +464,7 @@ export class TetrisScene extends Phaser.Scene {
   }
 
   private refillQueue() {
-    while (this.nextQueue.length < 3) {
-      this.nextQueue.push(this.drawFromBag());
-    }
+    while (this.nextQueue.length < 3) this.nextQueue.push(this.drawFromBag());
   }
 
   private tryMove(dx: number, dy: number): boolean {
@@ -373,7 +481,6 @@ export class TetrisScene extends Phaser.Scene {
   private tryRotate(direction: 1 | -1) {
     if (!this.active) return;
     const newRotation = (this.active.rotation + direction + 4) % 4;
-    // Tenta wall kicks
     for (const [dx, dy] of WALL_KICKS) {
       const candidate = { ...this.active, rotation: newRotation, x: this.active.x + dx, y: this.active.y + dy };
       if (this.isValidPosition(candidate)) {
@@ -402,15 +509,12 @@ export class TetrisScene extends Phaser.Scene {
 
   private isPieceLanded(): boolean {
     if (!this.active) return false;
-    const test = { ...this.active, y: this.active.y + 1 };
-    return !this.isValidPosition(test);
+    return !this.isValidPosition({ ...this.active, y: this.active.y + 1 });
   }
 
   private fallOneStep() {
     if (!this.active) return;
-    if (!this.tryMove(0, 1)) {
-      // landed — lock delay will handle
-    }
+    this.tryMove(0, 1);
   }
 
   private hardDrop() {
@@ -438,7 +542,6 @@ export class TetrisScene extends Phaser.Scene {
     }
     playTone(180, 60, "square", 0.08);
 
-    // Check for full lines
     const fullRows: number[] = [];
     for (let r = 0; r < ROWS; r++) {
       if (this.board[r].every((cell) => cell !== 0)) fullRows.push(r);
@@ -454,47 +557,32 @@ export class TetrisScene extends Phaser.Scene {
 
   private applyLineClears() {
     const n = this.clearingRows.length;
-    // Score Nintendo: 40/100/300/1200 × (level+1)
     const scoreTable = [0, 40, 100, 300, 1200];
-    this.score += scoreTable[n] * (this.level);
+    this.score += scoreTable[n] * this.level;
     this.lines += n;
     this.level = 1 + Math.floor(this.lines / 10);
 
-    // Remove rows e dá shift pra baixo
     for (const r of this.clearingRows.sort((a, b) => a - b)) {
       this.board.splice(r, 1);
       this.board.unshift(new Array(COLS).fill(0));
     }
-
     this.clearingRows = [];
     this.refreshChrome();
-
-    // Som específico
     if (n === 4) playTone(880, 200, "triangle", 0.16);
     else playTone(660, 120, "triangle", 0.12);
-
     this.spawnNext();
   }
 
   private tryHold() {
     if (!this.canHold || !this.active) return;
     const current = this.active.id;
-    if (this.hold === null) {
-      this.hold = current;
-      this.spawnNext();
-    } else {
-      const prevHold = this.hold;
-      this.hold = current;
-      this.spawnPiece(prevHold);
-    }
+    if (this.hold === null) { this.hold = current; this.spawnNext(); }
+    else { const prevHold = this.hold; this.hold = current; this.spawnPiece(prevHold); }
     this.canHold = false;
     playTone(330, 50, "square", 0.06);
   }
 
-  // ---------- gravity speed ----------
-
   private gravityInterval(): number {
-    // Tetris guideline-ish: gradient suave de 1000ms (lv1) até 50ms (lv20+)
     const level = Math.min(this.level, 20);
     return Math.max(50, 1000 - (level - 1) * 50);
   }
@@ -503,70 +591,86 @@ export class TetrisScene extends Phaser.Scene {
 
   private initBoard() {
     this.board = [];
-    for (let r = 0; r < ROWS; r++) {
-      this.board.push(new Array(COLS).fill(0));
-    }
+    for (let r = 0; r < ROWS; r++) this.board.push(new Array(COLS).fill(0));
   }
 
   private drawPlayfieldFrame() {
-    // Frame ao redor do playfield
-    const g = this.add.graphics();
-    g.lineStyle(1, COLOR_HEX.fg, 0.4);
-    g.strokeRect(PLAYFIELD_X - 2, PLAYFIELD_Y - 2, PLAYFIELD_W + 4, PLAYFIELD_H + 4);
+    this.frameGraphics.clear();
+    this.frameGraphics.lineStyle(1, COLOR_HEX.fg, 0.4);
+    this.frameGraphics.strokeRect(this.layout.pfX - 2, this.layout.pfY - 2, this.layout.pfW + 4, this.layout.pfH + 4);
 
-    // Grid sutil
-    g.lineStyle(1, COLOR_HEX.border, 0.6);
+    this.gridGraphics.clear();
+    this.gridGraphics.lineStyle(1, COLOR_HEX.border, 0.6);
     for (let c = 1; c < COLS; c++) {
-      g.lineBetween(PLAYFIELD_X + c * CELL, PLAYFIELD_Y, PLAYFIELD_X + c * CELL, PLAYFIELD_Y + PLAYFIELD_H);
+      this.gridGraphics.lineBetween(this.layout.pfX + c * this.layout.cell, this.layout.pfY,
+        this.layout.pfX + c * this.layout.cell, this.layout.pfY + this.layout.pfH);
     }
     for (let r = 1; r < ROWS; r++) {
-      g.lineBetween(PLAYFIELD_X, PLAYFIELD_Y + r * CELL, PLAYFIELD_X + PLAYFIELD_W, PLAYFIELD_Y + r * CELL);
+      this.gridGraphics.lineBetween(this.layout.pfX, this.layout.pfY + r * this.layout.cell,
+        this.layout.pfX + this.layout.pfW, this.layout.pfY + r * this.layout.cell);
     }
   }
 
   private drawSidePanels() {
-    // HOLD label
-    this.add.text(50, 100, "HOLD", { ...TEXT_PRESETS.monoLabelFg, fontSize: "14px" });
-    const g1 = this.add.graphics();
-    g1.lineStyle(1, COLOR_HEX.border, 1);
-    g1.strokeRect(50, 122, 4 * CELL + 4, 4 * CELL + 4);
+    // Destroy previous panel texts/labels
+    if (this.holdLabel) this.holdLabel.destroy();
+    if (this.nextLabel) this.nextLabel.destroy();
+    if (this.scoreText) this.scoreText.destroy();
+    if (this.linesText) this.linesText.destroy();
+    if (this.levelText) this.levelText.destroy();
 
-    // SCORE
-    this.add.text(50, 250, "SCORE", { ...TEXT_PRESETS.monoLabel, fontSize: "12px" });
-    this.scoreText = this.add.text(50, 268, "000000", { ...TEXT_PRESETS.monoLabelFg, fontSize: "24px" });
+    const L = this.layout;
+    this.holdLabel = this.add.text(L.holdX, L.holdY - 22, "HOLD", { ...TEXT_PRESETS.monoLabelFg, fontSize: "12px" });
+    this.nextLabel = this.add.text(L.nextX, L.nextY - 22, "NEXT", { ...TEXT_PRESETS.monoLabelFg, fontSize: "12px" });
 
-    // LINES
-    this.add.text(50, 320, "LINES", { ...TEXT_PRESETS.monoLabel, fontSize: "12px" });
-    this.linesText = this.add.text(50, 338, "000", { ...TEXT_PRESETS.monoLabelFg, fontSize: "20px" });
-
-    // LEVEL
-    this.add.text(50, 380, "LEVEL", { ...TEXT_PRESETS.monoLabel, fontSize: "12px" });
-    this.levelText = this.add.text(50, 398, "01", { ...TEXT_PRESETS.monoLabelFg, fontSize: "20px" });
-
-    // NEXT label
-    this.add.text(WIDTH - 50 - 4 * CELL - 4, 100, "NEXT", { ...TEXT_PRESETS.monoLabelFg, fontSize: "14px" });
-    const g2 = this.add.graphics();
-    g2.lineStyle(1, COLOR_HEX.border, 1);
-    g2.strokeRect(WIDTH - 50 - 4 * CELL - 4, 122, 4 * CELL + 4, 3 * 4 * CELL + 30); // espaço pra 3 next
+    if (L.portrait) {
+      // Stats em linha horizontal no topo entre hold e next
+      this.scoreText = this.add.text(L.statsX, L.statsY, "000000", { fontFamily: FONTS.mono, fontSize: `${L.scoreFontSize}px`, color: COLORS.fg, fontStyle: "500" }).setOrigin(0.5);
+      this.linesText = this.add.text(L.statsX, L.statsY + L.scoreFontSize + 2, "lines 0 · lv 1", { ...TEXT_PRESETS.hint, fontSize: "11px" }).setOrigin(0.5);
+      this.levelText = this.add.text(0, 0, "", { fontSize: "1px" }); // dummy invisible (level já no linesText)
+      this.levelText.setVisible(false);
+    } else {
+      // Landscape: stacked vertical
+      this.add.text(L.statsX, L.statsY - 20, "SCORE", { ...TEXT_PRESETS.monoLabel, fontSize: "10px" }).setOrigin(0.5);
+      this.scoreText = this.add.text(L.statsX, L.statsY, "000000", { fontFamily: FONTS.mono, fontSize: `${L.scoreFontSize}px`, color: COLORS.fg, fontStyle: "500" }).setOrigin(0.5);
+      this.add.text(L.statsX, L.statsY + 36, "LINES", { ...TEXT_PRESETS.monoLabel, fontSize: "10px" }).setOrigin(0.5);
+      this.linesText = this.add.text(L.statsX, L.statsY + 52, "000", { fontFamily: FONTS.mono, fontSize: "18px", color: COLORS.fg }).setOrigin(0.5);
+      this.add.text(L.statsX, L.statsY + 82, "LEVEL", { ...TEXT_PRESETS.monoLabel, fontSize: "10px" }).setOrigin(0.5);
+      this.levelText = this.add.text(L.statsX, L.statsY + 98, "01", { fontFamily: FONTS.mono, fontSize: "18px", color: COLORS.fg }).setOrigin(0.5);
+    }
   }
 
   private drawChrome() {
-    addCornerLabel(this, 22, 22, "/ 06", "TETRIS", false);
-    createPulsingDot(this, WIDTH - 22 - 4, 22 + 6, 4, COLOR_HEX.accent);
+    // Destroy existing chrome
+    for (const t of this.chromeTexts) t.destroy();
+    this.chromeTexts = [];
 
-    this.add.text(22, HEIGHT - 22, "GAMEDEV.06 · CLÁSSICO", TEXT_PRESETS.hint).setOrigin(0, 1);
-    this.add.text(WIDTH - 22, HEIGHT - 22, "← → ↓ ↑ ESPAÇO · SHIFT HOLD · P PAUSAR · K SCREENSHOT", TEXT_PRESETS.hint).setOrigin(1, 1);
+    const W = this.scale.width;
+    const H = this.scale.height;
+    const labels = addCornerLabel(this, 22, 22, "/ 06", "TETRIS", false);
+    if (labels.accentText) this.chromeTexts.push(labels.accentText);
+    this.chromeTexts.push(labels.mainText);
+    createPulsingDot(this, W - 22 - 4, 22 + 6, 4, COLOR_HEX.accent);
+
+    this.chromeTexts.push(
+      this.add.text(22, H - 22, "GAMEDEV.06", TEXT_PRESETS.hint).setOrigin(0, 1)
+    );
+    this.chromeTexts.push(
+      this.add.text(W - 22, H - 22, isTouchDevice()
+        ? "ARRASTE ↔ MOVER · TAP ROTAÇÃO · ↓ DROP · ↑ HOLD"
+        : "← → ↓ ↑ ESPAÇO · SHIFT HOLD · P PAUSAR · K", TEXT_PRESETS.hint).setOrigin(1, 1)
+    );
   }
 
   private drawOverlay() {
-    this.overlayBg = this.add.rectangle(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT, COLOR_HEX.bg, 0.82);
-    this.overlayTitle = this.add
-      .text(WIDTH / 2, HEIGHT / 2 - 40, "", TEXT_PRESETS.heroOutline)
-      .setOrigin(0.5)
-      .setFontSize("80px");
-    this.overlayHint = this.add
-      .text(WIDTH / 2, HEIGHT / 2 + 40, "", TEXT_PRESETS.hint)
-      .setOrigin(0.5);
+    if (this.overlayBg) this.overlayBg.destroy();
+    if (this.overlayTitle) this.overlayTitle.destroy();
+    if (this.overlayHint) this.overlayHint.destroy();
+    const W = this.scale.width;
+    const H = this.scale.height;
+    this.overlayBg = this.add.rectangle(W / 2, H / 2, W, H, COLOR_HEX.bg, 0.82);
+    this.overlayTitle = this.add.text(W / 2, H / 2 - 40, "", TEXT_PRESETS.heroOutline).setOrigin(0.5).setFontSize("80px");
+    this.overlayHint = this.add.text(W / 2, H / 2 + 40, "", TEXT_PRESETS.hint).setOrigin(0.5);
     this.hideOverlay();
   }
 
@@ -584,8 +688,12 @@ export class TetrisScene extends Phaser.Scene {
 
   private refreshChrome() {
     this.scoreText.setText(String(this.score).padStart(6, "0"));
-    this.linesText.setText(String(this.lines).padStart(3, "0"));
-    this.levelText.setText(String(this.level).padStart(2, "0"));
+    if (this.layout.portrait) {
+      this.linesText.setText(`lines ${this.lines} · lv ${this.level}`);
+    } else {
+      this.linesText.setText(String(this.lines).padStart(3, "0"));
+      this.levelText.setText(String(this.level).padStart(2, "0"));
+    }
   }
 
   private drawAll() {
@@ -596,10 +704,12 @@ export class TetrisScene extends Phaser.Scene {
     this.drawNext();
   }
 
-  private drawCell(g: Phaser.GameObjects.Graphics, col: number, row: number, color: number, alpha = 1, originX = PLAYFIELD_X, originY = PLAYFIELD_Y, size = CELL) {
+  private drawCell(g: Phaser.GameObjects.Graphics, col: number, row: number, color: number, alpha = 1) {
     if (color === 0) return;
     g.fillStyle(color, alpha);
-    g.fillRect(originX + col * size + 1, originY + row * size + 1, size - 2, size - 2);
+    g.fillRect(this.layout.pfX + col * this.layout.cell + 1,
+               this.layout.pfY + row * this.layout.cell + 1,
+               this.layout.cell - 2, this.layout.cell - 2);
   }
 
   private drawBoard() {
@@ -629,17 +739,15 @@ export class TetrisScene extends Phaser.Scene {
   private drawGhost() {
     this.ghostGraphics.clear();
     if (!this.active) return;
-    // Encontra posição final via simulação
     let ghostY = this.active.y;
     while (this.isValidPosition({ ...this.active, y: ghostY + 1 })) ghostY++;
-    if (ghostY === this.active.y) return; // já está no chão, não desenha ghost
-
+    if (ghostY === this.active.y) return;
     const shape = SHAPES[this.active.id][this.active.rotation];
     const color = PIECE_COLORS[this.active.id];
     for (let r = 0; r < shape.length; r++) {
       for (let c = 0; c < shape[r].length; c++) {
         if (!shape[r][c]) continue;
-        this.drawCell(this.ghostGraphics, this.active.x + c, ghostY + r, color, 0.18);
+        this.drawCell(this.ghostGraphics, this.active.x + c, ghostY + r, color, 0.2);
       }
     }
   }
@@ -649,9 +757,9 @@ export class TetrisScene extends Phaser.Scene {
     if (!this.hold) return;
     const shape = SHAPES[this.hold][0];
     const color = PIECE_COLORS[this.hold];
-    const cell = 18;
-    const baseX = 52 + (4 * cell - shape[0].length * cell) / 2;
-    const baseY = 124 + (4 * cell - shape.length * cell) / 2;
+    const cell = this.layout.holdSize;
+    const baseX = this.layout.holdX + (4 * cell - shape[0].length * cell) / 2;
+    const baseY = this.layout.holdY + (4 * cell - shape.length * cell) / 2;
     for (let r = 0; r < shape.length; r++) {
       for (let c = 0; c < shape[r].length; c++) {
         if (!shape[r][c]) continue;
@@ -663,14 +771,14 @@ export class TetrisScene extends Phaser.Scene {
 
   private drawNext() {
     this.nextGraphics.clear();
-    const cell = 18;
-    const baseX = WIDTH - 50 - 4 * cell - 2;
-    let baseY = 124;
-    for (let i = 0; i < 3 && i < this.nextQueue.length; i++) {
+    const cell = this.layout.nextSize;
+    let baseY = this.layout.nextY;
+    const count = Math.min(this.layout.nextCount, this.nextQueue.length);
+    for (let i = 0; i < count; i++) {
       const id = this.nextQueue[i];
       const shape = SHAPES[id][0];
       const color = PIECE_COLORS[id];
-      const offsetX = baseX + (4 * cell - shape[0].length * cell) / 2;
+      const offsetX = this.layout.nextX + (4 * cell - shape[0].length * cell) / 2;
       const offsetY = baseY + (4 * cell - shape.length * cell) / 2;
       for (let r = 0; r < shape.length; r++) {
         for (let c = 0; c < shape[r].length; c++) {
@@ -685,14 +793,13 @@ export class TetrisScene extends Phaser.Scene {
 
   private drawClearFlash() {
     this.flashGraphics.clear();
-    const alpha = (this.clearFlashTimer / 220);
+    const alpha = this.clearFlashTimer / 220;
     for (const r of this.clearingRows) {
       this.flashGraphics.fillStyle(COLOR_HEX.fg, alpha);
-      this.flashGraphics.fillRect(PLAYFIELD_X, PLAYFIELD_Y + r * CELL, PLAYFIELD_W, CELL);
+      this.flashGraphics.fillRect(this.layout.pfX, this.layout.pfY + r * this.layout.cell,
+        this.layout.pfW, this.layout.cell);
     }
   }
-
-  // ---------- game over ----------
 
   private gameOver() {
     this.state = "gameover";
